@@ -1,0 +1,97 @@
+#!/bin/bash 
+# (C) Erek Gokturk 2012
+# You can find the repo here: https://github.com/mdasheg/git-svn-externals
+# Published under GPLv3. You can find the license here:
+# http://www.gnu.org/licenses/gpl.html
+#
+# Usage: 
+#   git-svn-externals <dir with svn:externals>
+# or
+#   git-svn-externals "dir1 dir2 ..."
+
+
+#REPO_DIRS=`find . -type d -not -path '*/.git*' -print`
+REPO_DIRS=$1
+
+if [[ -z $REPO_DIRS ]] ; then
+	REPO_DIRS=vendor/plugins
+fi
+
+function process_ext() {
+	echo $1
+	echo $2
+}
+
+for REPO_DIR in $REPO_DIRS; do
+	git svn propget svn:externals $REPO_DIR \
+	| sed -E 's/([^[:space:]]+)[[:space:]]+([^[:space:]]+)/EXT_NAME=\1 EXT_URL=\2/' \
+	| sed -n -E '/[^[:space:]]/p' \
+	| while read defs; do
+		eval $defs
+
+		pushd . > /dev/null
+
+		if [[ $EXT_URL =~ ^(.*)/(trunk|branches|tags)/?([^/]+)? ]] ; then
+			# assume that repo has stdlayout
+
+			# chdir to ext dir, create if necessary
+			if [ ! -d $REPO_DIR/$EXT_NAME ] ; then
+				echo No directory for external $EXT_NAME: Creating...
+				mkdir $REPO_DIR/$EXT_NAME && \
+				cd $REPO_DIR/$EXT_NAME && \
+				git svn init --stdlayout ${BASH_REMATCH[1]}
+			else
+				cd $REPO_DIR/$EXT_NAME
+			fi
+
+			# update our local repo before searching for tags
+			echo "$EXT_NAME: Fetching unfetched commits and bringing repo up to date..."
+			git svn fetch
+
+			CURRENT_COMMIT=`git show | head -n 1`
+
+			case ${BASH_REMATCH[2]} in
+			"trunk")
+				GITSVN_TAG=trunk
+			;;
+			"branches")
+				GITSVN_TAG=${BASH_REMATCH[3]}
+			;;
+			"tags")
+				GITSVN_TAG=tags/${BASH_REMATCH[3]}
+			;;
+			esac
+
+			GITSVN_TAG_COMMIT=`git show $GITSVN_TAG | head -n 1`
+			if [[ ! $CURRENT_COMMIT == $GITSVN_TAG_COMMIT ]] ; then
+				echo "$EXT_NAME: Running 'git checkout $GITSVN_TAG' ..."
+				git checkout $GITSVN_TAG
+			fi
+
+		else
+
+			# chdir to ext dir, create if necessary
+			if [ ! -d $REPO_DIR/$EXT_NAME ] ; then
+				echo No directory for external $EXT_NAME: Creating...
+				mkdir $REPO_DIR/$EXT_NAME
+				cd $REPO_DIR/$EXT_NAME
+				git svn init $EXT_URL
+				echo "$EXT_NAME: Fetching unfetched commits and bringing repo up to date..."
+				git svn fetch
+			else
+				cd $REPO_DIR/$EXT_NAME
+
+				if [[ ! $EXT_URL == `git svn info | sed -n -E 's/^URL: (.+)/\1/p'` ]] ; then
+					echo "$EXT_NAME: Extern url changed, re-initing repo ..."
+					rm -rf *
+					git svn init $EXT_URL
+				fi
+				echo "$EXT_NAME: Fetching unfetched commits and bringing repo up to date..."
+				git svn fetch
+			fi
+		fi
+
+		popd > /dev/null
+		
+	done
+done
